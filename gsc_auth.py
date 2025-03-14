@@ -4,6 +4,7 @@ from googleapiclient.errors import HttpError
 import os
 import streamlit as st
 import json
+import tempfile
 
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = 'service-account-key.json'
@@ -22,8 +23,41 @@ def authenticate_gsc(use_stored=False):
         if 'gsc_service' in st.session_state:
             return st.session_state.gsc_service
         
+        # Check if we're running on Streamlit Cloud by checking for secrets
+        if hasattr(st, 'secrets') and 'gsc_service_account' in st.secrets:
+            try:
+                # Create a temporary file to store the credentials
+                with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp:
+                    # Write the credentials from secrets to the temp file
+                    json.dump(st.secrets.gsc_service_account, temp)
+                    temp_file_path = temp.name
+                
+                # Use the temporary file for authentication
+                SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly']
+                credentials = ServiceAccountCredentials.from_json_keyfile_name(temp_file_path, SCOPES)
+                
+                # Clean up the temporary file
+                os.unlink(temp_file_path)
+                
+                # Build the service
+                service = build('webmasters', 'v3', credentials=credentials)
+                
+                # Test the authentication with a simple API call
+                service.sites().list().execute()
+                
+                # Save in session state for future use
+                st.session_state.gsc_service = service
+                
+                return service
+                
+            except Exception as auth_error:
+                if not use_stored:
+                    st.error(f"Failed to authenticate with secrets: {str(auth_error)}")
+                
+                # Fall back to file-based authentication
+        
+        # Try to use stored file credentials
         if use_stored and os.path.exists(SERVICE_ACCOUNT_FILE):
-            # Use stored credentials without UI
             try:
                 SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly']
                 credentials = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, SCOPES)
